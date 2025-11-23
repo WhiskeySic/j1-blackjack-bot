@@ -11,6 +11,7 @@ import { LearningCoordinator } from "../learning/LearningCoordinator.ts";
 import { Card, GameSituation, GameExperience, SessionResult, OpponentSessionData } from "../types.ts";
 import { logger } from "../utils/logger.ts";
 import { config } from "../config.ts";
+import { authenticatedFetch } from "../utils/walletAuth.ts";
 
 interface GameState {
   session_id: string;
@@ -266,8 +267,12 @@ export class GameClient {
    */
   private async fetchGameState(): Promise<GameState | null> {
     try {
-      const response = await fetch(
-        `${this.platformUrl}/api/game-state/${this.sessionId}?wallet=${this.botWallet.getPublicKey()}`
+      const response = await authenticatedFetch(
+        `${this.platformUrl}/session-game-state`,
+        this.botWallet.getKeypair(),
+        this.sessionId,
+        "state",
+        { sessionId: this.sessionId }
       );
 
       if (!response.ok) {
@@ -275,7 +280,7 @@ export class GameClient {
       }
 
       const data = await response.json();
-      return data.gameState;
+      return data.state || data.gameState;
     } catch (error) {
       logger.error("[GameClient] Failed to fetch game state:", error);
       return null;
@@ -287,8 +292,12 @@ export class GameClient {
    */
   private async fetchSessionResults(): Promise<SessionResult | null> {
     try {
-      const response = await fetch(
-        `${this.platformUrl}/api/session-results/${this.sessionId}`
+      const response = await authenticatedFetch(
+        `${this.platformUrl}/session-results`,
+        this.botWallet.getKeypair(),
+        this.sessionId,
+        "results",
+        { sessionId: this.sessionId }
       );
 
       if (!response.ok) {
@@ -345,18 +354,18 @@ export class GameClient {
    */
   private async placeBet(amount: number): Promise<boolean> {
     try {
-      const response = await fetch(`${this.platformUrl}/api/game-action`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      const response = await authenticatedFetch(
+        `${this.platformUrl}/game-action`,
+        this.botWallet.getKeypair(),
+        this.sessionId,
+        "bet",
+        {
           sessionId: this.sessionId,
           walletAddress: this.botWallet.getPublicKey(),
           action: "bet",
           betAmount: amount,
-        }),
-      });
+        }
+      );
 
       return response.ok;
     } catch (error) {
@@ -370,17 +379,17 @@ export class GameClient {
    */
   private async executeAction(action: string): Promise<boolean> {
     try {
-      const response = await fetch(`${this.platformUrl}/api/game-action`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      const response = await authenticatedFetch(
+        `${this.platformUrl}/game-action`,
+        this.botWallet.getKeypair(),
+        this.sessionId,
+        action,
+        {
           sessionId: this.sessionId,
           walletAddress: this.botWallet.getPublicKey(),
           action,
-        }),
-      });
+        }
+      );
 
       return response.ok;
     } catch (error) {

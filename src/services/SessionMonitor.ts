@@ -8,6 +8,7 @@ import { BotWallet } from "./BotWallet.ts";
 import { GameClient } from "./GameClient.ts";
 import { logger } from "../utils/logger.ts";
 import { config } from "../config.ts";
+import { authenticatedFetch } from "../utils/walletAuth.ts";
 
 interface LobbySession {
   id: string;
@@ -79,8 +80,8 @@ export class SessionMonitor {
       logger.debug(`[SessionMonitor] Checking ${sessions.length} sessions...`);
 
       for (const session of sessions) {
-        // Skip if not in registration phase
-        if (session.status !== "registration") {
+        // Skip if not in waiting phase (accepting registrations)
+        if (session.status !== "waiting") {
           continue;
         }
 
@@ -114,7 +115,12 @@ export class SessionMonitor {
    */
   private async fetchLobbySessions(): Promise<LobbySession[]> {
     try {
-      const response = await fetch(`${this.platformUrl}/api/lobby-sessions`);
+      // Lobby-sessions doesn't require authentication, just POST with empty body
+      const response = await fetch(`${this.platformUrl}/lobby-sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -188,18 +194,19 @@ export class SessionMonitor {
     txSignature: string
   ): Promise<boolean> {
     try {
-      const response = await fetch(`${this.platformUrl}/api/register-participant`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      // Use authenticated request for registration
+      const response = await authenticatedFetch(
+        `${this.platformUrl}/register-participant`,
+        this.botWallet.getKeypair(),
+        sessionId,
+        "register",
+        {
           sessionId,
           walletAddress: this.botWallet.getPublicKey(),
           displayName: "Bob 🤖",
           txSignature,
-        }),
-      });
+        }
+      );
 
       if (!response.ok) {
         const error = await response.text();
@@ -208,7 +215,7 @@ export class SessionMonitor {
       }
 
       const data = await response.json();
-      return data.success === true;
+      return data.success === true || data.ok === true;
     } catch (error) {
       logger.error("[SessionMonitor] Failed to call register API:", error);
       return false;
