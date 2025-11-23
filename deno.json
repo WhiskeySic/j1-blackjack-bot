@@ -1,0 +1,10 @@
+{
+  "tasks": {
+    "start": "deno run --allow-net --allow-env --allow-read --allow-write src/main.ts",
+    "dev": "deno run --allow-net --allow-env --allow-read --allow-write --watch src/main.ts"
+  },
+  "imports": {
+    "@solana/web3.js": "https://esm.sh/@solana/web3.js@1.98.2",
+    "bs58": "https://esm.sh/bs58@6.0.0"
+  }
+}

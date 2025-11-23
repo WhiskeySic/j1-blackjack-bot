@@ -1,0 +1,33 @@
+# Bob Bot - Git ignore file
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Wallet files (NEVER commit private keys!)
+*.json
+!railway.json
+!package.json
+!deno.json
+
+# Learning data
+data/*.json
+data/*.csv
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Deno
+.deno/
