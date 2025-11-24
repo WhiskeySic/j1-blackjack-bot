@@ -80,8 +80,8 @@ export const config: Config = {
   gameStatePollIntervalMs: getEnvNumber("GAME_STATE_POLL_INTERVAL_MS", 2000),
 
   // Behavior
-  actionDelayMinMs: getEnvNumber("ACTION_DELAY_MIN_MS", 1000),
-  actionDelayMaxMs: getEnvNumber("ACTION_DELAY_MAX_MS", 3000),
+  actionDelayMinMs: getEnvNumber("ACTION_DELAY_MIN_MS", 300),
+  actionDelayMaxMs: getEnvNumber("ACTION_DELAY_MAX_MS", 800),
 
   // Betting (card counting)
   minBet: getEnvNumber("MIN_BET", 25),

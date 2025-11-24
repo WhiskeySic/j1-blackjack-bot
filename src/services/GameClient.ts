@@ -47,6 +47,7 @@ export class GameClient {
   private lastPhaseChangeTime: number = Date.now();
   private lastHandNumber: number = 0;
   private samePhaseCount: number = 0;
+  private pollBackoff: number = 1;
 
   constructor(
     platformUrl: string,
@@ -88,9 +89,14 @@ export class GameClient {
 
           if (!gameState) {
             logger.warn("[GameClient] No game state found");
-            await this.sleep(config.gameStatePollIntervalMs);
+            // Increase backoff if no state (might be slow backend)
+            this.pollBackoff = Math.min(this.pollBackoff * 1.5, 5);
+            await this.sleep(config.gameStatePollIntervalMs * this.pollBackoff);
             continue;
           }
+
+          // Reset backoff on successful state fetch
+          this.pollBackoff = 1;
 
           logger.debug(`[GameClient] Phase: ${gameState.phase}, Hand: ${gameState.hand_number}`);
 
@@ -121,11 +127,13 @@ export class GameClient {
             }
           }
 
-          // Wait before next poll
-          await this.sleep(config.gameStatePollIntervalMs);
+          // Wait before next poll (with backoff if needed)
+          await this.sleep(config.gameStatePollIntervalMs * this.pollBackoff);
         } catch (error) {
           logger.error("[GameClient] Error in game loop:", error);
-          await this.sleep(config.gameStatePollIntervalMs);
+          // Increase backoff on errors to avoid hammering failing API
+          this.pollBackoff = Math.min(this.pollBackoff * 1.5, 5);
+          await this.sleep(config.gameStatePollIntervalMs * this.pollBackoff);
         }
       }
 
@@ -172,30 +180,37 @@ export class GameClient {
 
     logger.info(`[GameClient] My state: bet=${myState.bet}, chips=${myState.chips}, status=${myState.status}`);
 
-    // Check if we've already bet
+    // CRITICAL FIX: Check if it's Bob's turn to bet (prevent betting before turn)
+    if (gameState.current_turn_seat !== undefined &&
+        gameState.current_turn_seat !== myState.seat_position) {
+      logger.debug(`[GameClient] Waiting for turn (current: seat ${gameState.current_turn_seat}, my seat: ${myState.seat_position})`);
+      return;
+    }
+
+    // CRITICAL FIX: Check game_hands table for confirmed bet (source of truth)
+    // This prevents race condition where state shows bet=0 but bet was already placed
+    const confirmedBet = await this.checkBetHistory(gameState.session_id, gameState.hand_number);
+
+    if (confirmedBet > 0) {
+      logger.info(`[GameClient] Already placed bet (confirmed in game_hands: ${confirmedBet} chips)`);
+      return;
+    }
+
+    // Check stale state as secondary guard
     if (myState.bet > 0) {
-      logger.info("[GameClient] Already placed bet");
-      return; // Already bet
+      logger.info(`[GameClient] Already placed bet (state shows: ${myState.bet} chips)`);
+      return;
     }
 
     // Random delay to appear human
-    await this.randomDelay();
+    await this.randomDelay(gameState);
 
-    // Get bet size from strategy (card counter)
-    const betSize = this.strategy.getDecision({
-      playerHand: [],
-      playerTotal: 0,
-      isSoft: false,
-      dealerUpcard: { suit: 'hearts', rank: '10' }, // Placeholder
-      trueCount: 0,
-      chipStack: myState.chips,
-      currentRank: 1,
-      handsRemaining: 10 - gameState.hand_number,
-      canDouble: false,
-      canSplit: false,
-    }, 0).betSize || config.minBet;
+    // Get bet size directly from card counter (uses true count from observed cards)
+    // NOTE: Don't call getDecision() during betting - we don't have cards yet!
+    const trueCount = this.strategy.cardCounter.getTrueCount();
+    const betSize = this.strategy.cardCounter.getBet(myState.chips);
 
-    logger.info(`[GameClient] Placing bet of ${betSize} chips...`);
+    logger.info(`[GameClient] Placing bet of ${betSize} chips (true count: ${trueCount.toFixed(1)})...`);
 
     const success = await this.placeBet(betSize);
     logger.info(`[GameClient] Bet placed: ${success ? 'SUCCESS' : 'FAILED'}`);
@@ -270,7 +285,7 @@ export class GameClient {
     }
 
     // Random delay to appear human
-    await this.randomDelay();
+    await this.randomDelay(gameState);
 
     // Execute action
     logger.info(
@@ -478,6 +493,51 @@ export class GameClient {
   }
 
   /**
+   * Check bet history in game_hands table (source of truth)
+   * Returns confirmed bet amount, or 0 if no bet found
+   */
+  private async checkBetHistory(sessionId: string, handNumber: number): Promise<number> {
+    try {
+      // Try to fetch hand history from backend
+      const response = await authenticatedFetch(
+        `${this.platformUrl}/session-game-state`,
+        this.botWallet.getKeypair(),
+        sessionId,
+        "check_bet_history",
+        {
+          sessionId,
+          handNumber,
+          walletAddress: this.botWallet.getPublicKey(),
+          action: "get_bet_history"
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        // Check if response has bet data
+        if (data.betAmount !== undefined) {
+          return data.betAmount;
+        }
+        // Alternative: check if game_hands data is in response
+        if (data.gameHands && Array.isArray(data.gameHands)) {
+          const myHand = data.gameHands.find(
+            (h: any) => h.wallet_address === this.botWallet.getPublicKey() &&
+                       h.hand_number === handNumber
+          );
+          if (myHand?.bet_amount) {
+            return myHand.bet_amount;
+          }
+        }
+      }
+    } catch (error) {
+      logger.debug("[GameClient] Could not check bet history (API may not support it):", error);
+    }
+
+    // Fallback: assume no confirmed bet (rely on state check)
+    return 0;
+  }
+
+  /**
    * Check if session is stuck (no progress for too long)
    */
   private isSessionStuck(gameState: GameState): boolean {
@@ -531,8 +591,11 @@ export class GameClient {
     // Check if it's my seat's turn
     const isMyTurn = gameState.current_turn_seat === myState.seat_position;
 
-    // Check if my status allows action
-    const canAct = myState.status === 'active' || myState.status === 'playing';
+    // Check if my status allows action (use blacklist instead of whitelist)
+    const cannotAct = ['busted', 'stood', 'blackjack', 'completed', 'finished'].includes(myState.status);
+    const canAct = !cannotAct;
+
+    logger.debug(`[GameClient] Turn check: isMyTurn=${isMyTurn}, status=${myState.status}, canAct=${canAct}`);
 
     return isMyTurn && canAct;
   }
@@ -569,8 +632,21 @@ export class GameClient {
 
   /**
    * Random delay to appear human
+   * Skips delay if Bob is the only active player (no point in appearing human to yourself!)
    */
-  private async randomDelay(): Promise<void> {
+  private async randomDelay(gameState?: GameState): Promise<void> {
+    // Skip delay if only 1 player in session (no need to appear human)
+    if (gameState) {
+      const activePlayers = gameState.player_states.filter(
+        p => p.status !== 'busted' && p.status !== 'completed'
+      ).length;
+
+      if (activePlayers <= 1) {
+        logger.debug("[GameClient] Skipping delay (only player remaining)");
+        return;
+      }
+    }
+
     const delay = Math.floor(
       Math.random() * (config.actionDelayMaxMs - config.actionDelayMinMs) +
       config.actionDelayMinMs
