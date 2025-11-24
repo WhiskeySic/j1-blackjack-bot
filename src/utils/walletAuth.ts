@@ -13,7 +13,7 @@ export interface SignedRequest {
     "Content-Type": string;
     "x-wallet-address": string;
     "x-wallet-signature": string;
-    "x-wallet-message": string;
+    "x-wallet-message-b64": string;
     "x-wallet-timestamp": string;
   };
   body: string;
@@ -40,12 +40,15 @@ export function createAuthHeaders(
   const signatureBytes = nacl.sign.detached(messageBytes, wallet.secretKey);
   const signature = bs58.encode(signatureBytes);
 
+  // Encode message in base64 to avoid newline issues in HTTP headers
+  const messageB64 = btoa(message);
+
   return {
     headers: {
       "Content-Type": "application/json",
       "x-wallet-address": walletAddress,
       "x-wallet-signature": signature,
-      "x-wallet-message": message,
+      "x-wallet-message-b64": messageB64,
       "x-wallet-timestamp": timestamp.toString(),
     },
     body: JSON.stringify(bodyData),

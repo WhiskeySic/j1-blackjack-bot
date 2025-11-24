@@ -12,9 +12,9 @@ railway variables \
   --set "PLATFORM_URL=https://vosmzvomrujduyjugnwa.supabase.co/functions/v1" \
   --set "HELIUS_RPC_URL=https://api.devnet.solana.com" \
   --set "ENTRY_FEE_SOL=0.05" \
-  --set "PLATFORM_WALLET=7ebkMKveJLpHbdyq5ZsxmRTotuyeqvEb2avxutVo2UCe" \
+  --set "PLATFORM_WALLET=AUDxVhzwYEdpXaF9irtLQfwzW2DH1ixYRaZBAGP5BPZ7" \
   --set "BOT_WALLET_PRIVATE_KEY=5t16pN2H9pqPVN1ptvLfutUqw4ZxK9HLF7iuvWS6mmCrQYkCeekXmCpH16pCWazyuKrJYQw7GCr3RZtT96YYP8kG" \
-  --set "SESSION_POLL_INTERVAL_MS=60000" \
+  --set "SESSION_POLL_INTERVAL_MS=10000" \
   --set "GAME_STATE_POLL_INTERVAL_MS=2000" \
   --set "ACTION_DELAY_MIN_MS=1000" \
   --set "ACTION_DELAY_MAX_MS=3000" \

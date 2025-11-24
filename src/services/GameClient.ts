@@ -13,19 +13,27 @@ import { logger } from "../utils/logger.ts";
 import { config } from "../config.ts";
 import { authenticatedFetch } from "../utils/walletAuth.ts";
 
+interface PlayerState {
+  participant_id: string;
+  seat_position: number;
+  wallet_address: string;
+  display_name: string;
+  chips: number;
+  bet: number;
+  cards: Card[];
+  status: string;
+}
+
 interface GameState {
   session_id: string;
+  table_id: string;
+  hand_number: number;
   phase: string;
-  current_hand: number;
-  wallet_address: string;
-  current_hand_cards: Card[];
-  current_bet: number;
-  current_chips: number;
   dealer_hand: Card[];
-  can_double: boolean;
-  can_split: boolean;
-  is_busted: boolean;
-  is_active: boolean;
+  player_states: PlayerState[];
+  current_turn_seat?: number;
+  deck_state: Card[];
+  betting_phase_started_at?: string;
 }
 
 export class GameClient {
@@ -36,6 +44,9 @@ export class GameClient {
   private learning: LearningCoordinator;
   private isPlaying: boolean = false;
   private currentHandNumber: number = 0;
+  private lastPhaseChangeTime: number = Date.now();
+  private lastHandNumber: number = 0;
+  private samePhaseCount: number = 0;
 
   constructor(
     platformUrl: string,
@@ -81,6 +92,16 @@ export class GameClient {
             continue;
           }
 
+          logger.debug(`[GameClient] Phase: ${gameState.phase}, Hand: ${gameState.hand_number}`);
+
+          // Check for stuck session (timeout detection)
+          if (this.isSessionStuck(gameState)) {
+            logger.error("[GameClient] ⚠️ Session appears to be stuck - exiting");
+            logger.error(`[GameClient] Phase: ${gameState.phase}, Hand: ${gameState.hand_number}`);
+            logger.error(`[GameClient] Stuck for ${Math.floor((Date.now() - this.lastPhaseChangeTime) / 1000)}s`);
+            break;
+          }
+
           // Check if session is finished
           if (gameState.phase === "completed") {
             logger.info("[GameClient] Session completed");
@@ -90,9 +111,14 @@ export class GameClient {
 
           // Handle different phases
           if (gameState.phase === "betting") {
+            logger.info("[GameClient] Detected betting phase");
             await this.handleBettingPhase(gameState);
-          } else if (gameState.phase === "action" && this.isMyTurn(gameState)) {
-            await this.handleActionPhase(gameState);
+          } else if (gameState.phase === "action") {
+            const myTurn = this.isMyTurn(gameState);
+            logger.debug(`[GameClient] Action phase, my turn: ${myTurn}`);
+            if (myTurn) {
+              await this.handleActionPhase(gameState);
+            }
           }
 
           // Wait before next poll
@@ -132,8 +158,23 @@ export class GameClient {
    * Handle betting phase
    */
   private async handleBettingPhase(gameState: GameState): Promise<void> {
+    // Find Bob's player state
+    const myState = gameState.player_states.find(
+      p => p.wallet_address === this.botWallet.getPublicKey()
+    );
+
+    if (!myState) {
+      logger.error("[GameClient] Player state not found in betting phase!");
+      logger.error(`[GameClient] My wallet: ${this.botWallet.getPublicKey()}`);
+      logger.error(`[GameClient] Players in game: ${gameState.player_states.map(p => p.wallet_address).join(', ')}`);
+      return;
+    }
+
+    logger.info(`[GameClient] My state: bet=${myState.bet}, chips=${myState.chips}, status=${myState.status}`);
+
     // Check if we've already bet
-    if (gameState.current_bet > 0) {
+    if (myState.bet > 0) {
+      logger.info("[GameClient] Already placed bet");
       return; // Already bet
     }
 
@@ -147,47 +188,64 @@ export class GameClient {
       isSoft: false,
       dealerUpcard: { suit: 'hearts', rank: '10' }, // Placeholder
       trueCount: 0,
-      chipStack: gameState.current_chips,
+      chipStack: myState.chips,
       currentRank: 1,
-      handsRemaining: 10 - gameState.current_hand,
+      handsRemaining: 10 - gameState.hand_number,
       canDouble: false,
       canSplit: false,
     }, 0).betSize || config.minBet;
 
-    logger.info(`[GameClient] Betting ${betSize} chips`);
+    logger.info(`[GameClient] Placing bet of ${betSize} chips...`);
 
-    await this.placeBet(betSize);
+    const success = await this.placeBet(betSize);
+    logger.info(`[GameClient] Bet placed: ${success ? 'SUCCESS' : 'FAILED'}`);
   }
 
   /**
    * Handle action phase (Bob's turn)
    */
   private async handleActionPhase(gameState: GameState): Promise<void> {
+    // Find Bob's player state
+    const myState = gameState.player_states.find(
+      p => p.wallet_address === this.botWallet.getPublicKey()
+    );
+
+    if (!myState) {
+      logger.warn("[GameClient] Player state not found");
+      return;
+    }
+
     // Observe dealer's upcard
     if (gameState.dealer_hand.length > 0) {
       this.strategy.observeCard(gameState.dealer_hand[0]);
     }
 
     // Observe Bob's cards
-    for (const card of gameState.current_hand_cards) {
+    for (const card of myState.cards) {
       this.strategy.observeCard(card);
     }
 
     // Calculate hand value
-    const { value: playerTotal, isSoft } = this.calculateHandValue(gameState.current_hand_cards);
+    const { value: playerTotal, isSoft } = this.calculateHandValue(myState.cards);
+
+    // Check if can double or split
+    const canDouble = myState.cards.length === 2 && myState.chips >= myState.bet;
+    const canSplit = myState.cards.length === 2 &&
+                     myState.cards[0].rank === myState.cards[1].rank &&
+                     myState.chips >= myState.bet;
 
     // Build game situation
     const situation: GameSituation = {
-      playerHand: gameState.current_hand_cards,
+      playerHand: myState.cards,
       playerTotal,
       isSoft,
       dealerUpcard: gameState.dealer_hand[0],
       trueCount: 0, // Will be set by card counter
-      chipStack: gameState.current_chips,
+      chipStack: myState.chips,
       currentRank: 1, // TODO: Get from game state
-      handsRemaining: 10 - gameState.current_hand,
-      canDouble: gameState.can_double,
-      canSplit: gameState.can_split,
+      handsRemaining: 10 - gameState.hand_number,
+      canDouble,
+      canSplit,
     };
 
     // Get learning adjustment if enabled
@@ -205,7 +263,10 @@ export class GameClient {
 
     // Adjust based on opponent profiles if learning enabled
     if (config.learningEnabled) {
-      decision = this.learning.adjustDecisionForOpponent(decision, []); // TODO: Get opponent wallets
+      const opponentWallets = gameState.player_states
+        .filter(p => p.wallet_address !== this.botWallet.getPublicKey())
+        .map(p => p.wallet_address);
+      decision = this.learning.adjustDecisionForOpponent(decision, opponentWallets);
     }
 
     // Random delay to appear human
@@ -213,7 +274,7 @@ export class GameClient {
 
     // Execute action
     logger.info(
-      `[GameClient] Hand ${gameState.current_hand}: ` +
+      `[GameClient] Hand ${gameState.hand_number}: ` +
       `${playerTotal}${isSoft ? ' (soft)' : ''} vs dealer ${gameState.dealer_hand[0].rank} -> ` +
       `${decision.action} (EV: ${decision.expectedValue.toFixed(3)})`
     );
@@ -354,18 +415,25 @@ export class GameClient {
    */
   private async placeBet(amount: number): Promise<boolean> {
     try {
+      const body = {
+        action: "bet",
+        amount: amount,
+      };
+      logger.info(`[GameClient] Bet request: POST ${this.platformUrl}/game-action`);
+      logger.info(`[GameClient] Bet body: ${JSON.stringify(body)}`);
+
       const response = await authenticatedFetch(
         `${this.platformUrl}/game-action`,
         this.botWallet.getKeypair(),
         this.sessionId,
         "bet",
-        {
-          sessionId: this.sessionId,
-          walletAddress: this.botWallet.getPublicKey(),
-          action: "bet",
-          betAmount: amount,
-        }
+        body
       );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        logger.error(`[GameClient] Bet API error (${response.status}): ${errorText}`);
+      }
 
       return response.ok;
     } catch (error) {
@@ -391,6 +459,11 @@ export class GameClient {
         }
       );
 
+      if (!response.ok) {
+        const errorText = await response.text();
+        logger.error(`[GameClient] Action API error (${response.status}): ${errorText}`);
+      }
+
       return response.ok;
     } catch (error) {
       logger.error(`[GameClient] Failed to execute ${action}:`, error);
@@ -399,12 +472,63 @@ export class GameClient {
   }
 
   /**
+   * Check if session is stuck (no progress for too long)
+   */
+  private isSessionStuck(gameState: GameState): boolean {
+    const now = Date.now();
+    const phaseKey = `${gameState.phase}-${gameState.hand_number}`;
+    const lastPhaseKey = `${this.lastHandNumber}`;
+
+    // Track if phase/hand has changed
+    if (gameState.hand_number !== this.lastHandNumber) {
+      // Hand number changed - reset timeout
+      this.lastPhaseChangeTime = now;
+      this.lastHandNumber = gameState.hand_number;
+      this.samePhaseCount = 0;
+      return false;
+    }
+
+    // Same phase/hand - check if stuck
+    const stuckDuration = now - this.lastPhaseChangeTime;
+
+    // Timeout thresholds
+    const BETTING_TIMEOUT = 5 * 60 * 1000; // 5 minutes in betting phase
+    const ACTION_TIMEOUT = 3 * 60 * 1000;  // 3 minutes in action phase
+
+    if (gameState.phase === "betting" && stuckDuration > BETTING_TIMEOUT) {
+      this.samePhaseCount++;
+      if (this.samePhaseCount > 30) { // 30 polls = 60 seconds of continuous stuck state
+        return true;
+      }
+    }
+
+    if (gameState.phase === "action" && stuckDuration > ACTION_TIMEOUT) {
+      this.samePhaseCount++;
+      if (this.samePhaseCount > 20) { // 20 polls = 40 seconds of continuous stuck state
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
    * Check if it's Bob's turn
    */
   private isMyTurn(gameState: GameState): boolean {
-    return gameState.wallet_address === this.botWallet.getPublicKey() &&
-           gameState.is_active &&
-           !gameState.is_busted;
+    const myState = gameState.player_states.find(
+      p => p.wallet_address === this.botWallet.getPublicKey()
+    );
+
+    if (!myState) return false;
+
+    // Check if it's my seat's turn
+    const isMyTurn = gameState.current_turn_seat === myState.seat_position;
+
+    // Check if my status allows action
+    const canAct = myState.status === 'active' || myState.status === 'playing';
+
+    return isMyTurn && canAct;
   }
 
   /**

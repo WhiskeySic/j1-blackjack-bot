@@ -15,9 +15,10 @@ interface LobbySession {
   session_number: number;
   status: string;
   current_players: number;
-  max_players: number;
-  entry_fee: number;
-  started_at: string;
+  prize_pool?: number;
+  join_window_ends_at?: string;
+  hands_played?: number;
+  hands_total?: number;
 }
 
 export class SessionMonitor {
@@ -74,12 +75,18 @@ export class SessionMonitor {
    * Check lobby for sessions needing Bob
    */
   private async checkSessions(): Promise<void> {
+    logger.info("[SessionMonitor] 🔄 Checking sessions...");
     try {
       const sessions = await this.fetchLobbySessions();
 
-      logger.debug(`[SessionMonitor] Checking ${sessions.length} sessions...`);
+      logger.info(`[SessionMonitor] Polling... found ${sessions.length} sessions`);
 
       for (const session of sessions) {
+        logger.info(
+          `[SessionMonitor] Session ${session.session_number}: ` +
+          `status="${session.status}", players=${session.current_players}`
+        );
+
         // Skip if not in waiting phase (accepting registrations)
         if (session.status !== "waiting") {
           continue;
@@ -87,11 +94,13 @@ export class SessionMonitor {
 
         // Skip if already registered for this session
         if (this.registeredSessions.has(session.id)) {
+          logger.info(`[SessionMonitor] Already registered for session ${session.session_number}`);
           continue;
         }
 
         // Skip if already in an active session
         if (this.activeGameClient !== null) {
+          logger.info(`[SessionMonitor] Already in active session, skipping ${session.session_number}`);
           continue;
         }
 
@@ -115,6 +124,7 @@ export class SessionMonitor {
    */
   private async fetchLobbySessions(): Promise<LobbySession[]> {
     try {
+      logger.info(`[SessionMonitor] Fetching from ${this.platformUrl}/lobby-sessions...`);
       // Lobby-sessions doesn't require authentication, just POST with empty body
       const response = await fetch(`${this.platformUrl}/lobby-sessions`, {
         method: "POST",
@@ -122,11 +132,14 @@ export class SessionMonitor {
         body: JSON.stringify({})
       });
 
+      logger.info(`[SessionMonitor] Response status: ${response.status}`);
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
       const data = await response.json();
+      logger.info(`[SessionMonitor] Got ${data.sessions?.length || 0} sessions from API`);
       return data.sessions || [];
     } catch (error) {
       logger.error("[SessionMonitor] Failed to fetch lobby sessions:", error);
@@ -140,11 +153,11 @@ export class SessionMonitor {
   private async registerForSession(session: LobbySession): Promise<void> {
     try {
       // Check wallet balance
-      const hasFunds = await this.botWallet.hasSufficientBalance(session.entry_fee);
+      const hasFunds = await this.botWallet.hasSufficientBalance(config.entryFeeSol);
       if (!hasFunds) {
         logger.error(
           `[SessionMonitor] Insufficient balance for session ${session.id} ` +
-          `(need ${session.entry_fee} SOL)`
+          `(need ${config.entryFeeSol} SOL)`
         );
         return;
       }
@@ -154,7 +167,7 @@ export class SessionMonitor {
       // Pay entry fee
       const txSignature = await this.botWallet.payEntryFee(
         config.platformWallet,
-        session.entry_fee
+        config.entryFeeSol
       );
 
       logger.info(`[SessionMonitor] Entry fee paid: ${txSignature}`);
@@ -202,9 +215,8 @@ export class SessionMonitor {
         "register",
         {
           sessionId,
-          walletAddress: this.botWallet.getPublicKey(),
-          displayName: "Bob 🤖",
-          txSignature,
+          displayName: "Bob",
+          paymentSignature: txSignature,
         }
       );
 
