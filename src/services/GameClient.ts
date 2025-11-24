@@ -416,17 +416,19 @@ export class GameClient {
   private async placeBet(amount: number): Promise<boolean> {
     try {
       const body = {
-        action: "bet",
-        amount: amount,
+        action: "place_bet",
+        sessionId: this.sessionId,
+        walletAddress: this.botWallet.getPublicKey(),
+        betAmount: amount,
       };
-      logger.info(`[GameClient] Bet request: POST ${this.platformUrl}/game-action`);
+      logger.info(`[GameClient] Bet request: POST ${this.platformUrl}/game-action-turnbased`);
       logger.info(`[GameClient] Bet body: ${JSON.stringify(body)}`);
 
       const response = await authenticatedFetch(
-        `${this.platformUrl}/game-action`,
+        `${this.platformUrl}/game-action-turnbased`,
         this.botWallet.getKeypair(),
         this.sessionId,
-        "bet",
+        "place_bet",
         body
       );
 
@@ -443,20 +445,24 @@ export class GameClient {
   }
 
   /**
-   * Execute game action
+   * Execute game action (hit, stand, double, split)
    */
   private async executeAction(action: string): Promise<boolean> {
     try {
+      const body = {
+        action,
+        sessionId: this.sessionId,
+        walletAddress: this.botWallet.getPublicKey(),
+      };
+      logger.info(`[GameClient] Action request: POST ${this.platformUrl}/game-action-turnbased`);
+      logger.info(`[GameClient] Action body: ${JSON.stringify(body)}`);
+
       const response = await authenticatedFetch(
-        `${this.platformUrl}/game-action`,
+        `${this.platformUrl}/game-action-turnbased`,
         this.botWallet.getKeypair(),
         this.sessionId,
         action,
-        {
-          sessionId: this.sessionId,
-          walletAddress: this.botWallet.getPublicKey(),
-          action,
-        }
+        body
       );
 
       if (!response.ok) {
