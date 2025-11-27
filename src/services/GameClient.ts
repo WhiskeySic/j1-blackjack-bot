@@ -182,7 +182,9 @@ export class GameClient {
     logger.info(`[GameClient] Turn check: current_turn_seat=${gameState.current_turn_seat}, my_seat=${myState.seat_position}`);
 
     // CRITICAL FIX: Check if it's Bob's turn to bet (prevent betting before turn)
+    // NOTE: current_turn_seat is null/undefined during betting phase = everyone can bet
     if (gameState.current_turn_seat !== undefined &&
+        gameState.current_turn_seat !== null &&
         gameState.current_turn_seat !== myState.seat_position) {
       logger.info(`[GameClient] ⏳ Waiting for turn (current: seat ${gameState.current_turn_seat}, my seat: ${myState.seat_position})`);
       return;
