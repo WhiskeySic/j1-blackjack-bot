@@ -238,26 +238,38 @@ export class SessionMonitor {
         { sessionId }
       );
 
+      logger.info(`[SessionMonitor] API response status: ${response.status}`);
+
       if (!response.ok) {
+        logger.info(`[SessionMonitor] API returned not OK, Bob not in session`);
         return false;
       }
 
       const data = await response.json();
       const gameState = data.state || data.gameState;
 
+      logger.info(`[SessionMonitor] gameState exists: ${!!gameState}`);
+      logger.info(`[SessionMonitor] player_states exists: ${!!gameState?.player_states}`);
+      logger.info(`[SessionMonitor] player_states length: ${gameState?.player_states?.length || 0}`);
+
       if (!gameState || !gameState.player_states) {
+        logger.info(`[SessionMonitor] No game state or player_states, Bob not in session`);
         return false;
       }
 
       // Check if Bob's wallet is in the player_states
       const bobWallet = this.botWallet.getPublicKey();
+      logger.info(`[SessionMonitor] Bob's wallet: ${bobWallet}`);
+      logger.info(`[SessionMonitor] Players in session: ${gameState.player_states.map((p: any) => p.wallet_address).join(', ')}`);
+
       const isBobPlaying = gameState.player_states.some(
         (p: any) => p.wallet_address === bobWallet
       );
 
+      logger.info(`[SessionMonitor] Bob found in player_states: ${isBobPlaying}`);
       return isBobPlaying;
     } catch (error) {
-      logger.debug(`[SessionMonitor] Failed to check Bob's participation in ${sessionId}:`, error);
+      logger.error(`[SessionMonitor] Error checking Bob's participation in ${sessionId}:`, error);
       return false;
     }
   }
