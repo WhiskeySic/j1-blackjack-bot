@@ -87,7 +87,35 @@ export class SessionMonitor {
           `status="${session.status}", players=${session.current_players}`
         );
 
-        // Skip if not in waiting phase (accepting registrations)
+        // Skip if already in an active session
+        if (this.activeGameClient !== null) {
+          logger.info(`[SessionMonitor] Already in active session, skipping ${session.session_number}`);
+          continue;
+        }
+
+        // CRITICAL FIX: Check if Bob is already in this session (from previous bot crash/restart)
+        if (session.status === "in_progress") {
+          const isBobInSession = await this.checkIfBobInSession(session.id);
+          if (isBobInSession) {
+            logger.info(`[SessionMonitor] 🔄 REJOINING active session ${session.session_number} - Bob is already playing!`);
+
+            // Start game client WITHOUT paying entry fee again
+            this.activeGameClient = new GameClient(
+              this.platformUrl,
+              this.botWallet,
+              session.id
+            );
+
+            await this.activeGameClient.play();
+
+            // Session completed - reset
+            this.activeGameClient = null;
+            logger.info(`[SessionMonitor] Session ${session.id} completed`);
+            continue;
+          }
+        }
+
+        // Skip if not in waiting phase (accepting new registrations)
         if (session.status !== "waiting") {
           continue;
         }
@@ -95,12 +123,6 @@ export class SessionMonitor {
         // Skip if already registered for this session
         if (this.registeredSessions.has(session.id)) {
           logger.info(`[SessionMonitor] Already registered for session ${session.session_number}`);
-          continue;
-        }
-
-        // Skip if already in an active session
-        if (this.activeGameClient !== null) {
-          logger.info(`[SessionMonitor] Already in active session, skipping ${session.session_number}`);
           continue;
         }
 
@@ -196,6 +218,44 @@ export class SessionMonitor {
       }
     } catch (error) {
       logger.error(`[SessionMonitor] Error registering for session ${session.id}:`, error);
+    }
+  }
+
+  /**
+   * Check if Bob is already registered in a session
+   */
+  private async checkIfBobInSession(sessionId: string): Promise<boolean> {
+    try {
+      // Fetch game state to see if Bob is a participant
+      const response = await authenticatedFetch(
+        `${this.platformUrl}/session-game-state`,
+        this.botWallet.getKeypair(),
+        sessionId,
+        "check_participation",
+        { sessionId }
+      );
+
+      if (!response.ok) {
+        return false;
+      }
+
+      const data = await response.json();
+      const gameState = data.state || data.gameState;
+
+      if (!gameState || !gameState.player_states) {
+        return false;
+      }
+
+      // Check if Bob's wallet is in the player_states
+      const bobWallet = this.botWallet.getPublicKey();
+      const isBobPlaying = gameState.player_states.some(
+        (p: any) => p.wallet_address === bobWallet
+      );
+
+      return isBobPlaying;
+    } catch (error) {
+      logger.debug(`[SessionMonitor] Failed to check Bob's participation in ${sessionId}:`, error);
+      return false;
     }
   }
 
