@@ -95,7 +95,10 @@ export class SessionMonitor {
 
         // CRITICAL FIX: Check if Bob is already in this session (from previous bot crash/restart)
         if (session.status === "in_progress") {
+          logger.info(`[SessionMonitor] 🔍 Checking if Bob is in session ${session.session_number}...`);
           const isBobInSession = await this.checkIfBobInSession(session.id);
+          logger.info(`[SessionMonitor] Bob in session ${session.session_number}? ${isBobInSession}`);
+
           if (isBobInSession) {
             logger.info(`[SessionMonitor] 🔄 REJOINING active session ${session.session_number} - Bob is already playing!`);
 
