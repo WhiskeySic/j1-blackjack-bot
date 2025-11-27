@@ -179,13 +179,17 @@ export class GameClient {
     }
 
     logger.info(`[GameClient] My state: bet=${myState.bet}, chips=${myState.chips}, status=${myState.status}`);
+    logger.info(`[GameClient] Turn check: current_turn_seat=${gameState.current_turn_seat}, my_seat=${myState.seat_position}`);
 
     // CRITICAL FIX: Check if it's Bob's turn to bet (prevent betting before turn)
     if (gameState.current_turn_seat !== undefined &&
         gameState.current_turn_seat !== myState.seat_position) {
-      logger.debug(`[GameClient] Waiting for turn (current: seat ${gameState.current_turn_seat}, my seat: ${myState.seat_position})`);
+      logger.info(`[GameClient] ⏳ Waiting for turn (current: seat ${gameState.current_turn_seat}, my seat: ${myState.seat_position})`);
       return;
     }
+
+    logger.info(`[GameClient] ✅ It's my turn to bet!`);
+
 
     // CRITICAL FIX: Check game_hands table for confirmed bet (source of truth)
     // This prevents race condition where state shows bet=0 but bet was already placed
