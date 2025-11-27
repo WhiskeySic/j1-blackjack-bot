@@ -5,6 +5,9 @@
  * Monitors sessions and automatically joins when only 1 player is registered.
  */
 
+// Load environment variables from .env file
+import "https://deno.land/std@0.208.0/dotenv/load.ts";
+
 import { SessionMonitor } from "./services/SessionMonitor.ts";
 import { BotWallet } from "./services/BotWallet.ts";
 import { config } from "./config.ts";
